@@ -1,0 +1,12 @@
+# Data & Machine Learning
+pandas
+numpy
+scikit-learn
+xgboost
+
+# Backend & API
+fastapi
+uvicorn
+
+# Frontend / UI
+streamlit
