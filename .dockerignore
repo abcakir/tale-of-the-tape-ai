@@ -1,0 +1,18 @@
+# Git
+.git
+.gitignore
+
+# Python & Umgebungen
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Daten & Modelle
+data/
+models/
+
+# IDE
+.vscode/
+.idea/
+.env
