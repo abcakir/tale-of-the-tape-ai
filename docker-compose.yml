@@ -9,3 +9,14 @@ services:
     volumes:
       - ./src:/app/src
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  web:
+    build: .
+    container_name: tale_web
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src:/app/src
+    command: streamlit run src/web/app.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - api
