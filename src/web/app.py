@@ -24,10 +24,16 @@ with col2:
     fighter_2 = st.text_input("Kämpfer 2 (Blau)", "Tom Aspinall")
 
 if st.button("Vorhersage berechnen"):
-    res = requests.get(f"http://api:8000/predict?fighter_1={fighter_1}&fighter_2={fighter_2}")
+    try:
+        res = requests.get(f"http://api:8000/predict?fighter_1={fighter_1}&fighter_2={fighter_2}")
     
-    if res.status_code == 200:
-        data = res.json()
-        st.subheader("Ergebnis:")
-        st.write(f"**{fighter_1}:** {data['win_probability_fighter_1']}%")
-        st.write(f"**{fighter_2}:** {data['win_probability_fighter_2']}%")
+        if res.status_code == 200:
+            data = res.json()
+            st.subheader("Ergebnis:")
+            st.write(f"**{fighter_1}:** {data['win_probability_fighter_1']}%")
+            st.write(f"**{fighter_2}:** {data['win_probability_fighter_2']}%")
+        else:
+            st.error("Fehler bei der Berechnung im Backend")
+    
+    except Exception as e:
+        st.error("Backend ist nicht erreichbar.")
