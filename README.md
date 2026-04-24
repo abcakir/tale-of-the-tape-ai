@@ -1,22 +1,40 @@
 # tale-of-the-tape-ai
 
-MVP für UFC-Fight-Predictions mit **FastAPI** und Main-Card-Fokus.
+FastAPI-basierter UFC-Predictor (Main Card only) mit Kaggle-Trainingspipeline.
 
-## Features (MVP)
-- `/predict?fighter_1=...&fighter_2=...` für Einzel-Matchup.
-- `/predict/upcoming-numbered-event` für kommendes nummeriertes UFC-Event (Main Card only).
-- Robuster Event-Ingestion-Fallback: Falls keine externe Quelle verfügbar ist, wird ein Fixture-Event genutzt.
-- Baseline-Training mit Logistic Regression via `scripts/train.py`.
+## Was ist neu
+- Echte Trainingspipeline auf Basis von `data/Fights.csv` und `data/Fighters Stats.csv`.
+- Keine pseudo-zufälligen Feature-Platzhalter mehr.
+- API gibt klare `503`-Fehler zurück, wenn Modell/Profile fehlen.
 
-## Quickstart
+## Voraussetzungen
+Lege folgende Dateien lokal ab:
+- `data/Fights.csv`
+- `data/Fighters Stats.csv`
+
+## Training
 ```bash
 pip install -r requirements.txt
 python scripts/train.py
+```
+
+Training erzeugt:
+- `artifacts/models/logreg.joblib`
+- `artifacts/fighter_profiles.csv`
+- `data/processed/matchups.csv`
+
+## API starten
+```bash
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+## Endpoints
+- `GET /` → Health + `predictor_ready`
+- `GET /predict?fighter_1=...&fighter_2=...`
+- `GET /predict/upcoming-numbered-event?main_card_only=true`
+
 ## Optional: externe Eventquelle
-Die API kann ein JSON-Event über `UFC_EVENTS_URL` laden. Erwartetes Schema:
+Setze `UFC_EVENTS_URL` auf eine JSON-Quelle mit folgendem Schema:
 
 ```json
 {
@@ -34,6 +52,3 @@ Die API kann ein JSON-Event über `UFC_EVENTS_URL` laden. Erwartetes Schema:
   ]
 }
 ```
-
-## Hinweis
-Die derzeitigen Fighter-Features in `src/features/build_matchup_features.py` sind deterministische MVP-Platzhalter. In v1 sollen sie durch Kaggle- und Live-Metriken ersetzt werden.
