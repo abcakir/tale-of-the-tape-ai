@@ -1,48 +1,80 @@
-import pandas as pd
-import xgboost as xgb
-from sklearn.model_selection import train_test_split
-import joblib
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
 
-print("Starte KI-Training...")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-df_fights = pd.read_csv("data/Fights.csv")
-df_stats = pd.read_csv("data/Fighters Stats.csv")
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+
+from src.model.predictor import FEATURE_ORDER
 
 
-df_fights = df_fights[df_fights['Result_1'].isin(['W', 'L'])]
-df_fights['Target'] = df_fights['Result_1'].apply(lambda x: 1 if x == 'W' else 0)
+def load_training_frame() -> pd.DataFrame:
+    """Loads engineered features.
 
-# Daten zusammenführen
-stats_f1 = df_stats.copy()
-stats_f1.columns = [f"{col}_F1" for col in stats_f1.columns]
-df_model = df_fights.merge(stats_f1, left_on='Fighter_Id_1', right_on='Fighter_Id_F1', how='left')
+    For MVP we support either:
+    1) data/processed/matchups.csv with FEATURE_ORDER + target
+    2) synthetic fallback dataset for local smoke tests
+    """
+    path = Path("data/processed/matchups.csv")
+    if path.exists():
+        df = pd.read_csv(path)
+        required = set(FEATURE_ORDER + ["target"])
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing columns in {path}: {sorted(missing)}")
+        return df
 
-stats_f2 = df_stats.copy()
-stats_f2.columns = [f"{col}_F2" for col in stats_f2.columns]
-df_model = df_model.merge(stats_f2, left_on='Fighter_Id_2', right_on='Fighter_Id_F2', how='left')
+    rng = np.random.default_rng(42)
+    n = 1500
+    X = rng.normal(size=(n, len(FEATURE_ORDER)))
+    w = np.array([0.45, -0.20, 0.30, 0.25, 0.03, -0.04])
+    probs = 1 / (1 + np.exp(-(X @ w)))
+    y = (rng.uniform(size=n) < probs).astype(int)
+    df = pd.DataFrame(X, columns=FEATURE_ORDER)
+    df["target"] = y
+    return df
 
-numeric_cols = df_model.select_dtypes(include=['number']).columns.tolist()
 
-features = [col for col in numeric_cols if col not in ['Target', 'KD_1', 'KD_2', 'STR_1', 'STR_2']]
+def main() -> None:
+    print("[train] Loading training frame...")
+    df = load_training_frame()
 
-df_model = df_model.dropna(subset=features)
+    split_idx = int(len(df) * 0.8)
+    train_df = df.iloc[:split_idx].copy()
+    test_df = df.iloc[split_idx:].copy()
 
-X = df_model[features]
-y = df_model['Target']
+    X_train = train_df[FEATURE_ORDER].values
+    y_train = train_df["target"].values
+    X_test = test_df[FEATURE_ORDER].values
+    y_test = test_df["target"].values
 
-# Train / Test Split (80% zum Lernen, 20% zum Prüfen)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = LogisticRegression(max_iter=200, random_state=42)
+    model.fit(X_train, y_train)
 
-print(f"Trainiere XGBoost mit {len(X_train)} Kämpfen und {len(features)} Features...")
-model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
-model.fit(X_train, y_train)
+    p = model.predict_proba(X_test)[:, 1]
+    metrics = {
+        "log_loss": log_loss(y_test, p),
+        "brier": brier_score_loss(y_test, p),
+        "roc_auc": roc_auc_score(y_test, p),
+    }
+    print("[train] Metrics:", {k: round(v, 4) for k, v in metrics.items()})
 
-# Kurzer Test
-accuracy = model.score(X_test, y_test)
-print(f"Training fertig. Genauigkeit auf Testdaten: {accuracy * 100:.2f}%")
+    out_dir = Path("artifacts/models")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_path = out_dir / "logreg.joblib"
+    joblib.dump(model, model_path)
+    print(f"[train] Saved model: {model_path}")
 
-# Modell speichern
-os.makedirs("models", exist_ok=True)
-joblib.dump(model, "models/xgb_model.joblib")
-print("Modell erfolgreich in 'models/xgb_model.joblib' gespeichert!")
+
+if __name__ == "__main__":
+    os.environ.setdefault("PYTHONHASHSEED", "42")
+    main()
