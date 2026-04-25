@@ -1,48 +1,152 @@
-import pandas as pd
-import xgboost as xgb
-from sklearn.model_selection import train_test_split
-import joblib
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
 
-print("Starte KI-Training...")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-df_fights = pd.read_csv("data/Fights.csv")
-df_stats = pd.read_csv("data/Fighters Stats.csv")
+import joblib
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+
+from src.features.build_matchup_features import FEATURE_COLUMNS, save_normalized_profiles
+
+DEFAULT_FIGHTS_CANDIDATES = [
+    "data/Fights.csv",
+    "data/fights.csv",
+    "data/raw/Fights.csv",
+    "data/raw/fights.csv",
+]
+DEFAULT_STATS_CANDIDATES = [
+    "data/Fighters Stats.csv",
+    "data/fighter_stats.csv",
+    "data/Fighters_Stats.csv",
+    "data/raw/Fighters Stats.csv",
+    "data/raw/fighter_stats.csv",
+]
 
 
-df_fights = df_fights[df_fights['Result_1'].isin(['W', 'L'])]
-df_fights['Target'] = df_fights['Result_1'].apply(lambda x: 1 if x == 'W' else 0)
+def _first_existing(candidates: list[str]) -> Path | None:
+    for path in candidates:
+        p = Path(path)
+        if p.exists():
+            return p
+    return None
 
-# Daten zusammenführen
-stats_f1 = df_stats.copy()
-stats_f1.columns = [f"{col}_F1" for col in stats_f1.columns]
-df_model = df_fights.merge(stats_f1, left_on='Fighter_Id_1', right_on='Fighter_Id_F1', how='left')
 
-stats_f2 = df_stats.copy()
-stats_f2.columns = [f"{col}_F2" for col in stats_f2.columns]
-df_model = df_model.merge(stats_f2, left_on='Fighter_Id_2', right_on='Fighter_Id_F2', how='left')
+def _resolve_input_path(env_key: str, candidates: list[str]) -> Path | None:
+    override = os.getenv(env_key)
+    if override:
+        p = Path(override)
+        if p.exists():
+            return p
+        raise FileNotFoundError(f"{env_key} points to missing file: {override}")
+    return _first_existing(candidates)
 
-numeric_cols = df_model.select_dtypes(include=['number']).columns.tolist()
 
-features = [col for col in numeric_cols if col not in ['Target', 'KD_1', 'KD_2', 'STR_1', 'STR_2']]
+def _require_input_data() -> tuple[pd.DataFrame, pd.DataFrame]:
+    fights_path = _resolve_input_path("FIGHTS_CSV", DEFAULT_FIGHTS_CANDIDATES)
+    stats_path = _resolve_input_path("FIGHTER_STATS_CSV", DEFAULT_STATS_CANDIDATES)
 
-df_model = df_model.dropna(subset=features)
+    if fights_path is None or stats_path is None:
+        raise FileNotFoundError(
+            "Missing Kaggle input files. Set FIGHTS_CSV/FIGHTER_STATS_CSV or place files at one of:\n"
+            f"- fights: {DEFAULT_FIGHTS_CANDIDATES}\n"
+            f"- fighter stats: {DEFAULT_STATS_CANDIDATES}"
+        )
 
-X = df_model[features]
-y = df_model['Target']
+    print(f"[train] Using fights CSV: {fights_path}")
+    print(f"[train] Using fighter stats CSV: {stats_path}")
+    return pd.read_csv(fights_path), pd.read_csv(stats_path)
 
-# Train / Test Split (80% zum Lernen, 20% zum Prüfen)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-print(f"Trainiere XGBoost mit {len(X_train)} Kämpfen und {len(features)} Features...")
-model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
-model.fit(X_train, y_train)
+def _result_to_target(series: pd.Series) -> pd.Series:
+    normalized = series.astype(str).str.upper().str.strip()
+    mapped = normalized.map({"W": 1, "L": 0})
+    return mapped
 
-# Kurzer Test
-accuracy = model.score(X_test, y_test)
-print(f"Training fertig. Genauigkeit auf Testdaten: {accuracy * 100:.2f}%")
 
-# Modell speichern
-os.makedirs("models", exist_ok=True)
-joblib.dump(model, "models/xgb_model.joblib")
-print("Modell erfolgreich in 'models/xgb_model.joblib' gespeichert!")
+def build_training_frame(fights: pd.DataFrame, raw_profiles: pd.DataFrame) -> pd.DataFrame:
+    profiles_path = save_normalized_profiles(raw_profiles)
+    profiles = pd.read_csv(profiles_path)
+
+    if "Fighter_1" not in fights.columns or "Fighter_2" not in fights.columns or "Result_1" not in fights.columns:
+        raise ValueError("Fights CSV must contain Fighter_1, Fighter_2, Result_1 columns")
+
+    fights = fights.copy()
+    fights["target"] = _result_to_target(fights["Result_1"])
+    fights = fights.dropna(subset=["target", "Fighter_1", "Fighter_2"])
+
+    merged = fights.merge(
+        profiles.add_prefix("a_"), left_on="Fighter_1", right_on="a_name", how="inner"
+    ).merge(
+        profiles.add_prefix("b_"), left_on="Fighter_2", right_on="b_name", how="inner"
+    )
+
+    df = pd.DataFrame(
+        {
+            "diff_slpm": merged["a_slpm"] - merged["b_slpm"],
+            "diff_sapm": merged["a_sapm"] - merged["b_sapm"],
+            "diff_td_avg": merged["a_td_avg"] - merged["b_td_avg"],
+            "diff_td_acc": merged["a_td_acc"] - merged["b_td_acc"],
+            "diff_td_def": merged["a_td_def"] - merged["b_td_def"],
+            "diff_sub_avg": merged["a_sub_avg"] - merged["b_sub_avg"],
+            "diff_age": merged["a_age"] - merged["b_age"],
+            "diff_reach": merged["a_reach"] - merged["b_reach"],
+            "diff_height": merged["a_height"] - merged["b_height"],
+            "target": merged["target"].astype(int),
+        }
+    )
+
+    return df.dropna(subset=FEATURE_COLUMNS + ["target"]).reset_index(drop=True)
+
+
+def train_model(df: pd.DataFrame) -> LogisticRegression:
+    if len(df) < 100:
+        raise ValueError(f"Too few training rows after join/cleaning: {len(df)}")
+
+    split_idx = int(len(df) * 0.8)
+    train_df = df.iloc[:split_idx]
+    test_df = df.iloc[split_idx:]
+
+    model = LogisticRegression(max_iter=300, random_state=42)
+    model.fit(train_df[FEATURE_COLUMNS].values, train_df["target"].values)
+
+    p = model.predict_proba(test_df[FEATURE_COLUMNS].values)[:, 1]
+    metrics = {
+        "log_loss": log_loss(test_df["target"].values, p),
+        "brier": brier_score_loss(test_df["target"].values, p),
+        "roc_auc": roc_auc_score(test_df["target"].values, p),
+    }
+    print("[train] Metrics:", {k: round(v, 4) for k, v in metrics.items()})
+    return model
+
+
+def main() -> None:
+    print("[train] Loading Kaggle UFC data...")
+    fights, profiles = _require_input_data()
+
+    print("[train] Building training frame...")
+    df = build_training_frame(fights, profiles)
+    out_data = Path("data/processed")
+    out_data.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_data / "matchups.csv", index=False)
+    print(f"[train] Training rows after cleaning: {len(df)}")
+
+    model = train_model(df)
+
+    out_models = Path("artifacts/models")
+    out_models.mkdir(parents=True, exist_ok=True)
+    path = out_models / "logreg.joblib"
+    joblib.dump(model, path)
+    print(f"[train] Saved model: {path}")
+    print("[train] Saved fighter profiles: artifacts/fighter_profiles.csv")
+
+
+if __name__ == "__main__":
+    os.environ.setdefault("PYTHONHASHSEED", "42")
+    main()
