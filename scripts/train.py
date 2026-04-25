@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -20,6 +21,7 @@ DEFAULT_FIGHTS_CANDIDATES = [
     "data/fights.csv",
     "data/raw/Fights.csv",
     "data/raw/fights.csv",
+    "data/ufc_fights.csv",
 ]
 DEFAULT_STATS_CANDIDATES = [
     "data/Fighters Stats.csv",
@@ -27,7 +29,20 @@ DEFAULT_STATS_CANDIDATES = [
     "data/Fighters_Stats.csv",
     "data/raw/Fighters Stats.csv",
     "data/raw/fighter_stats.csv",
+    "data/ufc_fighters.csv",
 ]
+
+FIGHTER_1_CANDIDATES = ["Fighter_1", "RedFighter", "r_fighter", "red_fighter", "fighter_red"]
+FIGHTER_2_CANDIDATES = ["Fighter_2", "BlueFighter", "b_fighter", "blue_fighter", "fighter_blue"]
+RESULT_CANDIDATES = ["Result_1", "Winner", "winner", "winner_name", "winning_corner"]
+
+
+def _pick_col(columns: Iterable[str], candidates: list[str]) -> str | None:
+    colset = set(columns)
+    for c in candidates:
+        if c in colset:
+            return c
+    return None
 
 
 def _first_existing(candidates: list[str]) -> Path | None:
@@ -64,27 +79,58 @@ def _require_input_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.read_csv(fights_path), pd.read_csv(stats_path)
 
 
-def _result_to_target(series: pd.Series) -> pd.Series:
-    normalized = series.astype(str).str.upper().str.strip()
-    mapped = normalized.map({"W": 1, "L": 0})
-    return mapped
+def _result_to_target(result: pd.Series, fighter_1: pd.Series, fighter_2: pd.Series) -> pd.Series:
+    normalized = result.astype(str).str.upper().str.strip()
+
+    # direct W/L format for fighter_1
+    direct = normalized.map({"W": 1, "L": 0})
+
+    # red/blue corner format
+    corner = normalized.map(
+        {
+            "RED": 1,
+            "R": 1,
+            "BLUE": 0,
+            "B": 0,
+            "FIGHTER_1": 1,
+            "FIGHTER_2": 0,
+        }
+    )
+
+    # winner name format
+    f1 = fighter_1.astype(str).str.upper().str.strip()
+    f2 = fighter_2.astype(str).str.upper().str.strip()
+    winner_name = pd.Series(index=result.index, dtype="float64")
+    winner_name[normalized == f1] = 1.0
+    winner_name[normalized == f2] = 0.0
+
+    target = direct.fillna(corner).fillna(winner_name)
+    return target
 
 
 def build_training_frame(fights: pd.DataFrame, raw_profiles: pd.DataFrame) -> pd.DataFrame:
     profiles_path = save_normalized_profiles(raw_profiles)
     profiles = pd.read_csv(profiles_path)
 
-    if "Fighter_1" not in fights.columns or "Fighter_2" not in fights.columns or "Result_1" not in fights.columns:
-        raise ValueError("Fights CSV must contain Fighter_1, Fighter_2, Result_1 columns")
+    f1_col = _pick_col(fights.columns, FIGHTER_1_CANDIDATES)
+    f2_col = _pick_col(fights.columns, FIGHTER_2_CANDIDATES)
+    result_col = _pick_col(fights.columns, RESULT_CANDIDATES)
+    if not f1_col or not f2_col or not result_col:
+        raise ValueError(
+            "Could not resolve required fight columns. Need fighter_1/fighter_2/result equivalents. "
+            f"Available columns: {list(fights.columns)[:40]}"
+        )
 
     fights = fights.copy()
-    fights["target"] = _result_to_target(fights["Result_1"])
-    fights = fights.dropna(subset=["target", "Fighter_1", "Fighter_2"])
+    fights["fighter_1"] = fights[f1_col].astype(str).str.strip()
+    fights["fighter_2"] = fights[f2_col].astype(str).str.strip()
+    fights["target"] = _result_to_target(fights[result_col], fights["fighter_1"], fights["fighter_2"])
+    fights = fights.dropna(subset=["target", "fighter_1", "fighter_2"])
 
     merged = fights.merge(
-        profiles.add_prefix("a_"), left_on="Fighter_1", right_on="a_name", how="inner"
+        profiles.add_prefix("a_"), left_on="fighter_1", right_on="a_name", how="inner"
     ).merge(
-        profiles.add_prefix("b_"), left_on="Fighter_2", right_on="b_name", how="inner"
+        profiles.add_prefix("b_"), left_on="fighter_2", right_on="b_name", how="inner"
     )
 
     df = pd.DataFrame(

@@ -2,16 +2,28 @@
 
 FastAPI-basierter UFC-Predictor (Main Card only) mit Kaggle-Trainingspipeline.
 
+## Schnellstart: Kaggle-Daten in `data/`
+Wenn du das Dataset `aminealibi/ufc-fights-fighters-and-events-dataset` direkt holen willst:
+
+```bash
+bash scripts/fetch_kaggle_data.sh
+```
+
+Der Download landet bewusst in `data/` (nicht in `data/raw`).
+
+> Voraussetzung lokal: Kaggle CLI + API-Key (`~/.kaggle/kaggle.json`).
+
 ## Was ist neu
 - Echte Trainingspipeline auf Basis von Fight- und Fighter-Stats CSVs.
 - Keine pseudo-zufälligen Feature-Platzhalter mehr.
 - API gibt klare `503`-Fehler zurück, wenn Modell/Profile fehlen.
-- CSV-Pfade sind jetzt flexibel über Umgebungsvariablen konfigurierbar.
+- CSV-Pfade sind flexibel über Umgebungsvariablen konfigurierbar.
+- Robustere Spalten-Erkennung für Fight-CSV (`Fighter_1`/`RedFighter` etc., `Result_1`/`Winner` etc.).
 
 ## Dateneingang
 Standardmäßig sucht das Training folgende Dateinamen:
-- Fights: `data/Fights.csv`, `data/fights.csv`, `data/raw/Fights.csv`, `data/raw/fights.csv`
-- Fighter Stats: `data/Fighters Stats.csv`, `data/fighter_stats.csv`, `data/Fighters_Stats.csv`, `data/raw/Fighters Stats.csv`, `data/raw/fighter_stats.csv`
+- Fights: `data/Fights.csv`, `data/fights.csv`, `data/raw/Fights.csv`, `data/raw/fights.csv`, `data/ufc_fights.csv`
+- Fighter Stats: `data/Fighters Stats.csv`, `data/fighter_stats.csv`, `data/Fighters_Stats.csv`, `data/raw/Fighters Stats.csv`, `data/raw/fighter_stats.csv`, `data/ufc_fighters.csv`
 
 Optional kannst du explizite Pfade setzen:
 - `FIGHTS_CSV=/abs/or/rel/path/to/fights.csv`
