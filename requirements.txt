@@ -3,10 +3,12 @@ pandas
 numpy
 scikit-learn
 xgboost
+joblib
 
 # Backend & API
 fastapi
 uvicorn
+requests
 
 # Frontend / UI
 streamlit
